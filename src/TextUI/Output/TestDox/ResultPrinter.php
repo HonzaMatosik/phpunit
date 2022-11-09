@@ -12,14 +12,17 @@ namespace PHPUnit\TextUI\Output\TestDox;
 use const PHP_EOL;
 use function array_map;
 use function assert;
+use function explode;
 use function implode;
+use function preg_match;
 use function preg_split;
+use function rtrim;
 use function trim;
 use PHPUnit\Event\Code\Throwable;
 use PHPUnit\Event\TestData\NoDataSetFromDataProviderException;
 use PHPUnit\Framework\TestStatus\TestStatus;
-use PHPUnit\Logging\TestDox\TestMethod;
-use PHPUnit\Logging\TestDox\TestMethodCollection;
+use PHPUnit\Logging\TestDox\TestResult;
+use PHPUnit\Logging\TestDox\TestResultCollection;
 use PHPUnit\Util\Color;
 use PHPUnit\Util\Printer;
 
@@ -38,7 +41,7 @@ final class ResultPrinter
     }
 
     /**
-     * @psalm-param array<string, TestMethodCollection> $tests
+     * @psalm-param array<string, TestResultCollection> $tests
      */
     public function print(array $tests): void
     {
@@ -75,7 +78,7 @@ final class ResultPrinter
     /**
      * @throws NoDataSetFromDataProviderException
      */
-    private function printTestResult(TestMethod $test): void
+    private function printTestResult(TestResult $test): void
     {
         $this->printTestResultHeader($test);
         $this->printTestResultBody($test);
@@ -84,23 +87,25 @@ final class ResultPrinter
     /**
      * @throws NoDataSetFromDataProviderException
      */
-    private function printTestResultHeader(TestMethod $test): void
+    private function printTestResultHeader(TestResult $test): void
     {
+        $buffer = ' ' . $this->symbolFor($test->status()) . ' ';
+
         if ($this->colors) {
             $this->printer->print(
                 Color::colorizeTextBox(
                     $this->colorFor($test->status()),
-                    ' ' . $this->symbolFor($test->status()) . ' '
+                    $buffer
                 )
             );
         } else {
-            $this->printer->print(' ' . $this->symbolFor($test->status()) . ' ');
+            $this->printer->print($buffer);
         }
 
         $this->printer->print($test->test()->prettifiedMethodName() . PHP_EOL);
     }
 
-    private function printTestResultBody(TestMethod $test): void
+    private function printTestResultBody(TestResult $test): void
     {
         if ($test->status()->isSuccess()) {
             return;
@@ -110,10 +115,38 @@ final class ResultPrinter
 
         assert($throwable instanceof Throwable);
 
+        $this->printTestResultBodyStart($test);
+
         $this->printer->print(
             $this->prefixLines(
                 $this->prefixFor('default', $test->status()),
-                PHP_EOL . $this->formatThrowable($throwable)
+                $this->formatThrowable($throwable)
+            )
+        );
+
+        $this->printTestResultBodyEnd($test);
+    }
+
+    private function printTestResultBodyStart(TestResult $test): void
+    {
+        $this->printer->print(
+            $this->prefixLines(
+                $this->prefixFor('start', $test->status()),
+                ''
+            )
+        );
+
+        $this->printer->print(PHP_EOL);
+    }
+
+    private function printTestResultBodyEnd(TestResult $test): void
+    {
+        $this->printer->print(PHP_EOL);
+
+        $this->printer->print(
+            $this->prefixLines(
+                $this->prefixFor('last', $test->status()),
+                ''
             )
         );
 
@@ -134,8 +167,25 @@ final class ResultPrinter
     private function formatStackTrace(string $stackTrace): string
     {
         if (!$this->colors) {
-            return $stackTrace;
+            return rtrim($stackTrace);
         }
+
+        $lines        = [];
+        $previousPath = '';
+
+        foreach (explode(PHP_EOL, $stackTrace) as $line) {
+            if (preg_match('/^(.*):(\d+)$/', $line, $matches)) {
+                $lines[]      = Color::colorizePath($matches[1], $previousPath) . Color::dim(':') . Color::colorize('fg-blue', $matches[2]) . "\n";
+                $previousPath = $matches[1];
+
+                continue;
+            }
+
+            $lines[]      = $line;
+            $previousPath = '';
+        }
+
+        return rtrim(implode('', $lines));
     }
 
     private function prefixLines(string $prefix, string $message): string
@@ -199,10 +249,10 @@ final class ResultPrinter
         return 'fg-blue';
     }
 
-    private function messageColorFor(TestStatus $status): ?string
+    private function messageColorFor(TestStatus $status): string
     {
         if ($status->isSuccess()) {
-            return null;
+            return '';
         }
 
         if ($status->isError()) {
